@@ -33,6 +33,26 @@
         TODO [M6] Eliminación (8 pts)
           - Envuelva cada ion-item en ion-item-sliding con un ion-item-option "Eliminar" (color danger).
       -->
+      <ion-refresher slot="fixed" @ionRefresh="refrescar"><ion-refresher-content /></ion-refresher>
+      <ion-skeleton-text v-if="cargando && !pagina" animated />
+      <div v-if="error" class="estado-vacio">{{ error }}
+        <ion-button @click="cargar(!pagina)">Reintentar</ion-button>
+      </div>
+      <p v-else-if="!cargando && !equipos.length" class="estado-vacio">No se encontraron equipos.</p>
+      <ion-list>
+        <ion-item-sliding v-for="equipo in equipos" :key="equipo.id">
+          <ion-item :router-link="'/tabs/equipos/' + equipo.id + '/editar'">
+            <ion-label><h2>{{ equipo.nombre }}</h2><p>{{ equipo.codigo }} · {{ equipo.categoria.nombre }}</p></ion-label>
+            <ion-badge slot="end" :color="colorEstado[equipo.estado]">{{ equipo.estado }}</ion-badge>
+          </ion-item>
+          <ion-item-options><ion-item-option color="danger" @click="confirmarEliminacion(equipo, $event)">
+            <ion-icon :icon="trashOutline" /> Eliminar
+          </ion-item-option></ion-item-options>
+        </ion-item-sliding>
+      </ion-list>
+      <ion-infinite-scroll :disabled="!hayMas || !!error || !pagina" @ionInfinite="cargarMas">
+        <ion-infinite-scroll-content />
+      </ion-infinite-scroll>
     </ion-content>
   </ion-page>
 </template>
@@ -76,26 +96,46 @@ const hayMas = computed(() => pagina.value < ultimaPagina.value);
  *  - Use listar(pagina, q) de services/equipos.ts y actualice pagina/ultimaPagina con meta.
  *  - Maneje cargando y error (un 401 ya lo resuelve api.ts).
  */
+let solicitud = 0;
 async function cargar(reiniciar = false) {
-  void [reiniciar, listar, equipos, pagina, ultimaPagina, cargando, error];
+  if (!reiniciar && (cargando.value || !hayMas.value)) return;
+  const actual = ++solicitud;
+  if (reiniciar) {
+    equipos.value = [];
+    pagina.value = 0;
+    ultimaPagina.value = 1;
+  }
+  cargando.value = true;
+  error.value = '';
+  try {
+    const resultado = await listar(pagina.value + 1, q.value);
+    if (actual !== solicitud) return;
+    equipos.value = reiniciar ? resultado.data : equipos.value.concat(resultado.data);
+    pagina.value = resultado.meta.current_page;
+    ultimaPagina.value = resultado.meta.last_page;
+  } catch (fallo) {
+    if (actual === solicitud) error.value = fallo instanceof Error ? fallo.message : 'Error al cargar equipos.';
+  } finally {
+    if (actual === solicitud) cargando.value = false;
+  }
 }
 
 /**
  * TODO [M4] La lista debe recargarse CADA VEZ que la persona vuelve a esta página
  *           (por ejemplo, al regresar del formulario). Elija el hook de ciclo de vida correcto.
  */
-void onIonViewWillEnter;
+onIonViewWillEnter(() => cargar(true));
 
 const buscar = () => cargar(true);
 
 /** TODO [M4] Recargar desde la página 1 y cerrar el refresher (evento.target.complete()). */
 async function refrescar(evento: RefresherCustomEvent) {
-  void evento;
+  try { await cargar(true); } finally { await evento.target.complete(); }
 }
 
 /** TODO [M4] Cargar la página siguiente y cerrar el infinite scroll (evento.target.complete()). */
 async function cargarMas(evento: InfiniteScrollCustomEvent) {
-  void evento;
+  try { await cargar(); } finally { await evento.target.complete(); }
 }
 
 /**
@@ -109,7 +149,28 @@ async function cargarMas(evento: InfiniteScrollCustomEvent) {
  *       404 → quitarlo de la lista y avisar que ya no existe.
  */
 async function confirmarEliminacion(equipo: Equipo, evento: Event) {
-  void [equipo, evento, alertController, ErrorApi, mostrarToast, vibrar, eliminar];
+  await (evento.currentTarget as HTMLElement).closest('ion-item-sliding')?.close();
+  const alerta = await alertController.create({
+    header: '¿Eliminar ' + equipo.nombre + '?',
+    buttons: [{ text: 'Cancelar', role: 'cancel' }, { text: 'Eliminar', role: 'destructive' }],
+  });
+  await alerta.present();
+  if ((await alerta.onDidDismiss()).role !== 'destructive') return;
+  const quitar = () => { equipos.value = equipos.value.filter(item => item.id !== equipo.id); };
+  try {
+    await eliminar(equipo.id);
+  } catch (fallo) {
+    if (fallo instanceof ErrorApi && fallo.status === 404) {
+      quitar();
+      await mostrarToast('El equipo ya no existe.', 'warning');
+    } else {
+      await mostrarToast(fallo instanceof ErrorApi ? fallo.message : 'Error al eliminar.', 'danger');
+    }
+    return;
+  }
+  quitar();
+  await vibrar();
+  await mostrarToast('Equipo eliminado.', 'success');
 }
 
 void [refrescar, cargarMas, confirmarEliminacion, colorEstado, hayMas];

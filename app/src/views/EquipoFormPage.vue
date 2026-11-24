@@ -106,7 +106,20 @@ const errores = ref<Record<string, string>>({});
  */
 onIonViewWillEnter(async () => {
   errores.value = {};
-  void [categorias, obtener, listaCategorias, estadoActual, ionRouter];
+  Object.assign(datos, vacio());
+  estadoActual.value = 'disponible';
+  try {
+    listaCategorias.value = await categorias();
+    if (id) {
+      const equipo = await obtener(id);
+      estadoActual.value = equipo.estado;
+      Object.assign(datos, { codigo: equipo.codigo, nombre: equipo.nombre, categoria_id: equipo.categoria.id,
+        fecha_adquisicion: equipo.fecha_adquisicion, estado: equipo.estado === 'prestado' ? undefined : equipo.estado });
+    }
+  } catch (error) {
+    await mostrarToast(error instanceof ErrorApi && error.status === 404 ? 'El equipo ya no existe.' : 'Error al cargar el formulario.', 'danger');
+    volver();
+  }
 });
 
 /**
@@ -119,7 +132,29 @@ onIonViewWillEnter(async () => {
  *  5. 422 → mostrar el primer mensaje de cada campo debajo de su campo (error.erroresPorCampo).
  *     404 → toast "El equipo ya no existe."   ·   otros → toast genérico.
  */
+function volver() {
+  if (ionRouter.canGoBack()) ionRouter.back();
+  else ionRouter.navigate('/tabs/equipos', 'root', 'replace');
+}
 async function guardar() {
-  void [loadingController, actualizar, crear, ErrorApi, mostrarToast, vibrar];
+  errores.value = {};
+  const loading = await loadingController.create({ message: 'Guardando…' });
+  await loading.present();
+  try {
+    const costo = String(datos.costo_interno ?? '').trim();
+    const cuerpo = { ...datos, codigo: datos.codigo.trim().toUpperCase(),
+      costo_interno: costo && Number.isFinite(Number(costo)) ? Number(costo) : null };
+    if (estadoActual.value === 'prestado') delete cuerpo.estado;
+    if (id) await actualizar(id, cuerpo);
+    else await crear(cuerpo);
+    await vibrar();
+    await mostrarToast('Equipo guardado.', 'success');
+    volver();
+  } catch (error) {
+    if (error instanceof ErrorApi && error.status === 422) errores.value = error.erroresPorCampo;
+    else await mostrarToast(error instanceof ErrorApi && error.status === 404 ? 'El equipo ya no existe.' : 'Error al guardar el equipo.', 'danger');
+  } finally {
+    await loading.dismiss();
+  }
 }
 </script>
