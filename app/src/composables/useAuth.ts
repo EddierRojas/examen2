@@ -25,8 +25,12 @@ export const obtenerToken = () => token.value;
  */
 
 /** TODO [M2] Borrar token y usuario de la memoria (refs) y del almacenamiento cifrado. */
+let restauracion: Promise<void> | undefined;
 export async function olvidarSesion() {
-  // TODO [M2]
+  tokenCargado = true;
+  token.value = null;
+  usuario.value = null;
+  await Promise.all([SecureStorage.remove(CLAVE_TOKEN), SecureStorage.remove(CLAVE_USUARIO)]);
 }
 
 export function useAuth() {
@@ -41,8 +45,21 @@ export function useAuth() {
    *  No atrape el error: LoginPage.vue ya muestra los 422.
    */
   async function login(email: string, password: string) {
-    void [email, password, api, Device, SecureStorage, CLAVE_TOKEN, CLAVE_USUARIO];
-    throw new Error('TODO [M2] login sin implementar');
+    const info = await Device.getInfo();
+    const device_name = (info.platform + ' ' + info.model).slice(0, 60);
+    const sesion = await api<{ token: string; usuario: Usuario }>('/login', {
+      method: 'POST', body: { email, password, device_name },
+    });
+    try {
+      await SecureStorage.set(CLAVE_USUARIO, { ...sesion.usuario });
+      await SecureStorage.set(CLAVE_TOKEN, sesion.token);
+    } catch (error) {
+      await olvidarSesion();
+      throw error;
+    }
+    tokenCargado = true;
+    usuario.value = sesion.usuario;
+    token.value = sesion.token;
   }
 
   /**
@@ -51,7 +68,17 @@ export function useAuth() {
    *  Debe ejecutarse una sola vez (use la bandera tokenCargado).
    */
   async function cargarToken() {
-    void tokenCargado;
+    if (tokenCargado) return;
+    restauracion ??= (async () => {
+      const [guardado, perfil] = await Promise.all([SecureStorage.get(CLAVE_TOKEN), SecureStorage.get(CLAVE_USUARIO)]);
+      if (!tokenCargado && typeof guardado === 'string' && perfil && typeof perfil === 'object' &&
+          'id' in perfil && typeof perfil.id === 'number' && 'nombre' in perfil && typeof perfil.nombre === 'string') {
+        token.value = guardado;
+        usuario.value = { id: perfil.id, nombre: perfil.nombre };
+      }
+      tokenCargado = true;
+    })().finally(() => { restauracion = undefined; });
+    await restauracion;
   }
 
   /**
@@ -60,7 +87,9 @@ export function useAuth() {
    *  aunque la API falle (sin red o token vencido).
    */
   async function cerrarSesion() {
-    // TODO [M2]
+    try { await api('/logout', { method: 'POST' }); }
+    catch { /* La revocación remota puede fallar sin conexión. */ }
+    finally { await olvidarSesion(); }
   }
 
   return { usuario, estaAutenticado, login, cargarToken, cerrarSesion };

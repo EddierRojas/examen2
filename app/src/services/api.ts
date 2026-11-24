@@ -29,6 +29,37 @@ export interface OpcionesApi {
  *  8. En cualquier otro caso, devolver el cuerpo JSON.
  */
 export async function api<T = unknown>(ruta: string, opciones: OpcionesApi = {}): Promise<T> {
-  void [ErrorApi, obtenerToken, olvidarSesion, router, BASE_URL, TIEMPO_MAXIMO_MS, ruta, opciones];
-  throw new Error('TODO [M1] api() sin implementar');
+  const url = new URL(BASE_URL + ruta);
+  for (const [clave, valor] of Object.entries(opciones.params ?? {})) {
+    if (valor !== undefined && valor !== '') url.searchParams.set(clave, String(valor));
+  }
+  const headers = new Headers({ Accept: 'application/json' });
+  const token = obtenerToken();
+  if (token) headers.set('Authorization', 'Bearer ' + token);
+  const body = JSON.stringify(opciones.body);
+  if (body !== undefined) headers.set('Content-Type', 'application/json');
+  const control = new AbortController();
+  const timer = setTimeout(() => control.abort(), TIEMPO_MAXIMO_MS);
+  let respuesta: Response;
+  let cuerpo;
+  try {
+    respuesta = await fetch(url, { method: opciones.method ?? 'GET', headers, body, signal: control.signal });
+    if (respuesta.status === 204) return null as T;
+    const contenido = await respuesta.text();
+    try { cuerpo = JSON.parse(contenido); }
+    catch { if (respuesta.ok) throw new SyntaxError('Respuesta JSON inválida.'); cuerpo = null; }
+  } catch (error) {
+    if (error instanceof SyntaxError) throw error;
+    throw new ErrorApi(0, { mensaje: 'No fue posible conectar con la API.' });
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!respuesta.ok) {
+    if (respuesta.status === 401 && ruta !== '/login' && token === obtenerToken()) {
+      await olvidarSesion();
+      await router.replace('/login');
+    }
+    throw new ErrorApi(respuesta.status, cuerpo);
+  }
+  return cuerpo;
 }
